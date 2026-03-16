@@ -1,0 +1,5 @@
+The quick brown fox jumps over the lazy dog. This is a sample text file to test the human typing simulator.
+
+When you run the script, switch to any text editor or chat window. The simulated keystrokes will appear there as if a real person were typing. You should see variable speed, occasional mistakes that get corrected, and natural pauses between sentences.
+
+Feel free to replace this file with any content you want typed out. The simulator handles paragraphs, punctuation, and line breaks naturally.
