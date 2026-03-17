@@ -28,6 +28,9 @@ Every run generates a unique "typist personality" with randomized rhythm, speed,
 - **Correction hesitation** — realistic pause before backspacing (the "oh no" moment)
 - **Faster retyping** — corrected text is retyped slightly faster, mimicking muscle memory
 
+### IDE Support
+- **`--ide-mode`** — clears auto-inserted indentation after each Enter keystroke, so the source file's original whitespace is preserved exactly. Works with IntelliJ IDEA, VS Code, Eclipse, PyCharm, and other editors with auto-indent.
+
 ### Per-Session Personality
 Each run randomizes:
 - Base WPM (48–82 range by default)
@@ -75,6 +78,9 @@ Each run randomizes:
 # Fully randomized typist personality
 python human_typer.py input.txt
 
+# For IDEs with auto-indent (IntelliJ, VS Code, etc.)
+python human_typer.py input.txt --ide-mode
+
 # Set a specific base speed
 python human_typer.py input.txt --wpm 65
 
@@ -88,15 +94,15 @@ python human_typer.py input.txt --start-delay 10
 python human_typer.py input.txt --seed 42
 
 # Combine options
-python human_typer.py input.txt --wpm 70 --typo-rate 0.02 --start-delay 8
+python human_typer.py input.txt --ide-mode --wpm 70 --typo-rate 0.02
 ```
 
 ### Controls
 
-| Key        | Action             |
-|------------|--------------------|
-| `F8` / `F9` | Pause / Resume   |
-| `ESC`      | Stop immediately   |
+| Key          | Action             |
+|--------------|--------------------|
+| `F8` / `F9`  | Pause / Resume    |
+| `ESC`        | Stop immediately   |
 
 > **Note:** Both F8 and F9 work as pause/resume toggles. Some IDEs (IntelliJ, VS Code) intercept F9 for debugging, so F8 is provided as an alternative.
 
@@ -111,6 +117,23 @@ python human_typer.py input.txt --wpm 70 --typo-rate 0.02 --start-delay 8
 | `--typo-rate`   | Random (1.5–4%)  | Probability of a typo per character      |
 | `--start-delay` | `5`              | Seconds before typing begins             |
 | `--seed`        | None             | Random seed for reproducible runs        |
+| `--ide-mode`    | Off              | Clear IDE auto-indent after each Enter   |
+
+---
+
+## IDE Mode
+
+When typing into code editors like IntelliJ IDEA or VS Code, the editor automatically inserts indentation after you press Enter. This causes double-indentation because the script then types the source file's original whitespace on top of the auto-inserted whitespace.
+
+**`--ide-mode` fixes this** by sending `Home → Home → Shift+End → Delete` after each Enter keystroke to clear whatever the IDE auto-inserted, then typing the next line's whitespace exactly as it appears in the source file.
+
+```bash
+# Without --ide-mode in IntelliJ: double-indented mess
+python human_typer.py MyClass.java
+
+# With --ide-mode: indentation matches source file exactly
+python human_typer.py MyClass.java --ide-mode
+```
 
 ---
 

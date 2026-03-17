@@ -10,7 +10,7 @@ Requirements:
 Usage:
     python human_typer.py input.txt
     python human_typer.py input.txt --wpm 65 --typo-rate 0.025
-    python human_typer.py input.txt --start-delay 5
+    python human_typer.py input.txt --ide-mode        # for IntelliJ, VS Code, etc.
 
 Press F8 or F9 to pause/resume. Press ESC to abort.
 """
@@ -25,7 +25,6 @@ import threading
 from pathlib import Path
 
 # ─── Keyboard layout: adjacency map for realistic typos ─────────────────────
-# Maps each key to its physical neighbors on a QWERTY keyboard
 ADJACENT_KEYS = {
     'q': 'wa', 'w': 'qeas', 'e': 'wrds', 'r': 'etdf', 't': 'ryfg',
     'y': 'tugh', 'u': 'yijh', 'i': 'uojk', 'o': 'iplk', 'p': 'ol',
@@ -37,7 +36,6 @@ ADJACENT_KEYS = {
     '6': '57ty', '7': '68yu', '8': '79ui', '9': '80io', '0': '9p',
 }
 
-# Common bigrams that are typed faster (fingers are already in position)
 FAST_BIGRAMS = {
     'th', 'he', 'in', 'er', 'an', 'on', 'en', 'at', 'es', 'ed',
     'or', 'te', 'ti', 'is', 'it', 'al', 'ar', 'st', 'to', 'nt',
@@ -47,14 +45,12 @@ FAST_BIGRAMS = {
     'ge', 'ly', 'ne', 'us', 'ec', 'di', 've', 'me', 'sa', 'ce',
 }
 
-# Bigrams that are typically slow (awkward finger transitions)
 SLOW_BIGRAMS = {
     'br', 'cr', 'fr', 'gr', 'pr', 'tr', 'bl', 'cl', 'fl', 'gl',
     'pl', 'mn', 'nm', 'bf', 'fb', 'gk', 'kg', 'pq', 'qp', 'xz',
     'zx', 'zy', 'yz', 'qz', 'zq', 'jy', 'yj', 'vw', 'wv',
 }
 
-# Keys that require Shift — these take slightly longer
 SHIFT_CHARS = set('ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+{}|:"<>?~')
 
 
@@ -62,11 +58,9 @@ class TypingProfile:
     """Encapsulates all the parameters that define a 'typist personality'."""
 
     def __init__(self, base_wpm=None, typo_rate=None):
-        # Randomize a base WPM in a realistic range if not specified
         self.base_wpm = base_wpm or random.uniform(48, 82)
         self.typo_rate = typo_rate if typo_rate is not None else random.uniform(0.015, 0.04)
 
-        # Per-session personality quirks (randomized each run)
         self.rhythm_irregularity = random.uniform(0.15, 0.40)
         self.pause_tendency = random.uniform(0.3, 0.8)
         self.burst_speed_factor = random.uniform(1.15, 1.45)
@@ -74,28 +68,23 @@ class TypingProfile:
         self.recovery_chance = random.uniform(0.002, 0.008)
         self.think_pause_chance = random.uniform(0.001, 0.006)
 
-        # Correction behavior
         self.instant_correct_pct = random.uniform(0.55, 0.85)
         self.delayed_correct_max = random.randint(1, 4)
         self.correction_pause_base = random.uniform(0.08, 0.25)
 
-        # Current state
         self.chars_typed = 0
         self.in_burst = False
         self.burst_remaining = 0
         self.current_speed_modifier = 1.0
 
     def base_delay(self):
-        """Base delay per character in seconds, derived from WPM."""
         cpm = self.base_wpm * 5
         return 60.0 / cpm
 
     def get_delay(self, prev_char, curr_char, position_in_word, word_length):
-        """Calculate a realistic delay for typing curr_char after prev_char."""
         base = self.base_delay()
 
         fatigue_factor = 1.0 + (self.chars_typed * self.fatigue_rate)
-
         if random.random() < self.recovery_chance:
             fatigue_factor *= random.uniform(0.85, 0.95)
 
@@ -126,7 +115,6 @@ class TypingProfile:
             pos_mod = random.uniform(0.85, 1.02)
 
         shift_mod = random.uniform(1.08, 1.25) if curr_char in SHIFT_CHARS else 1.0
-
         if curr_char == ' ':
             shift_mod = random.uniform(0.80, 0.98)
 
@@ -143,19 +131,12 @@ class TypingProfile:
         return max(0.02, delay)
 
     def get_punctuation_pause(self, char):
-        """Extra pause after punctuation."""
-        if char == '.':
-            return random.uniform(0.25, 0.90)
-        elif char == ',':
-            return random.uniform(0.08, 0.35)
-        elif char == '!':
-            return random.uniform(0.20, 0.70)
-        elif char == '?':
-            return random.uniform(0.25, 0.80)
-        elif char == ':':
-            return random.uniform(0.15, 0.45)
-        elif char == ';':
-            return random.uniform(0.12, 0.40)
+        if char == '.':   return random.uniform(0.25, 0.90)
+        elif char == ',': return random.uniform(0.08, 0.35)
+        elif char == '!': return random.uniform(0.20, 0.70)
+        elif char == '?': return random.uniform(0.25, 0.80)
+        elif char == ':': return random.uniform(0.15, 0.45)
+        elif char == ';': return random.uniform(0.12, 0.40)
         return 0
 
     def get_newline_pause(self):
@@ -168,110 +149,81 @@ class TypingProfile:
         return random.random() < self.typo_rate
 
     def get_typo_char(self, intended_char):
-        """Generate a realistic typo for the intended character."""
         lower = intended_char.lower()
-
         if lower in ADJACENT_KEYS and random.random() < 0.70:
             typo = random.choice(ADJACENT_KEYS[lower])
             return typo.upper() if intended_char.isupper() else typo
-
         if lower.isalpha() and random.random() < 0.50:
             offset = random.choice([-1, 1, -2, 2])
             idx = ord(lower) - ord('a') + offset
             if 0 <= idx < 26:
                 typo = chr(ord('a') + idx)
                 return typo.upper() if intended_char.isupper() else typo
-
         if random.random() < 0.5:
             typo = random.choice(string.ascii_lowercase)
             return typo.upper() if intended_char.isupper() else typo
-
         return intended_char
 
     def get_correction_behavior(self):
-        """Returns (immediate: bool, extra_chars: int)."""
         if random.random() < self.instant_correct_pct:
             return True, 0
         else:
-            extra = random.randint(1, self.delayed_correct_max)
-            return False, extra
+            return False, random.randint(1, self.delayed_correct_max)
 
 
 class HumanTyper:
     """Main typing engine — reads text and injects keystrokes."""
 
-    def __init__(self, text, profile=None, start_delay=3):
+    def __init__(self, text, profile=None, start_delay=3, ide_mode=False):
         self.text = text
         self.profile = profile or TypingProfile()
         self.start_delay = start_delay
+        self.ide_mode = ide_mode
 
-        # ── Thread synchronization via Events (no locks needed) ──
-        # _resume_event: SET = running, CLEAR = paused
-        # _stop_event:   SET = abort requested
+        # Thread synchronization via Events (lock-free)
         self._resume_event = threading.Event()
-        self._resume_event.set()  # start in "running" state
+        self._resume_event.set()
         self._stop_event = threading.Event()
-
-        # Track pause state for toggle logic (accessed only from listener)
         self._is_paused = False
 
         self._keyboard = None
         self._listener = None
 
     def _on_key_press(self, key):
-        """Handle hotkeys: F8/F9 = pause/resume, ESC = stop.
-
-        This runs on the pynput listener thread.  We NEVER call print()
-        here — only set/clear Events, which is thread-safe and lock-free.
-        Status messages are printed by the main thread when it wakes up.
-        """
+        """Handle hotkeys. Runs on listener thread — never print() here."""
         from pynput.keyboard import Key
         if key in (Key.f8, Key.f9):
             if not self._is_paused:
-                # Pause: clear the resume event so _wait() blocks
                 self._is_paused = True
                 self._resume_event.clear()
             else:
-                # Resume: set the resume event so _wait() unblocks
                 self._is_paused = False
                 self._resume_event.set()
         elif key == Key.esc:
             self._stop_event.set()
-            # Also unblock _wait() in case we're paused
             self._resume_event.set()
 
     def _wait(self, seconds):
-        """Sleep for `seconds` with responsive pause/stop.
-
-        Uses Event.wait() which blocks without holding any lock,
-        so the listener thread can always toggle state instantly.
-        """
+        """Sleep with responsive pause/stop via Events."""
         elapsed = 0.0
         increment = 0.02
 
         while elapsed < seconds:
-            # Check for stop
             if self._stop_event.is_set():
                 return False
-
-            # If paused, block here until resumed (or stopped)
             if not self._resume_event.is_set():
                 print("\n[PAUSED] Press F8 or F9 to resume", flush=True)
-                # Block until _resume_event is set (resume or stop)
                 self._resume_event.wait()
                 if self._stop_event.is_set():
                     return False
                 print("[RESUMED] Typing continues...\n", flush=True)
-
             time.sleep(min(increment, seconds - elapsed))
             elapsed += increment
-
         return True
 
     def _type_char(self, char):
         """Type a single character using pynput."""
         from pynput.keyboard import Key
-
         if char == '\n':
             self._keyboard.press(Key.enter)
             self._keyboard.release(Key.enter)
@@ -281,10 +233,43 @@ class HumanTyper:
         else:
             self._keyboard.type(char)
 
-    def _backspace(self, count=1):
-        """Press backspace `count` times with realistic timing."""
+    def _clear_auto_indent(self):
+        """Clear any whitespace the IDE auto-inserted after Enter.
+
+        Sends: Home → Home → Shift+End → Delete
+        Double-Home ensures we reach column 0 even in IDEs with "smart
+        home" that first jumps to the first non-whitespace character.
+        Shift+End selects everything from column 0 to end of line, and
+        Delete removes it.  If the line is empty this is a harmless no-op.
+        """
         from pynput.keyboard import Key
 
+        # Let the IDE finish processing Enter and inserting auto-indent.
+        # IntelliJ and VS Code do this asynchronously; 80-120ms is safe.
+        time.sleep(random.uniform(0.08, 0.14))
+
+        # Home twice to guarantee column 0 (smart-home toggle)
+        self._keyboard.press(Key.home)
+        self._keyboard.release(Key.home)
+        time.sleep(0.02)
+        self._keyboard.press(Key.home)
+        self._keyboard.release(Key.home)
+        time.sleep(0.02)
+
+        # Shift+End to select all auto-inserted whitespace
+        self._keyboard.press(Key.shift)
+        self._keyboard.press(Key.end)
+        self._keyboard.release(Key.end)
+        self._keyboard.release(Key.shift)
+        time.sleep(0.02)
+
+        # Delete the selection (harmless if nothing selected)
+        self._keyboard.press(Key.delete)
+        self._keyboard.release(Key.delete)
+        time.sleep(0.02)
+
+    def _backspace(self, count=1):
+        from pynput.keyboard import Key
         for _ in range(count):
             delay = random.uniform(0.03, 0.09)
             if not self._wait(delay):
@@ -294,23 +279,17 @@ class HumanTyper:
         return True
 
     def _cleanup(self):
-        """Cleanly stop the listener (call from main thread)."""
         if self._listener is not None:
             self._listener.stop()
             self._listener.join(timeout=2.0)
             self._listener = None
 
     def run(self):
-        """Execute the typing simulation."""
         from pynput.keyboard import Controller, Listener
-
         self._keyboard = Controller()
-
-        # Start hotkey listener (non-daemon so we can join it cleanly)
         self._listener = Listener(on_press=self._on_key_press)
         self._listener.daemon = False
         self._listener.start()
-
         try:
             self._run_inner()
         finally:
@@ -319,7 +298,9 @@ class HumanTyper:
     def _run_inner(self):
         """Core typing loop."""
 
+        mode_label = "IDE mode (auto-indent cleanup ON)" if self.ide_mode else "Standard mode"
         print(f"\nTyping will begin in {self.start_delay} seconds...")
+        print(f"  Mode:       {mode_label}")
         print(f"  WPM target: ~{self.profile.base_wpm:.0f}")
         print(f"  Typo rate:  ~{self.profile.typo_rate * 100:.1f}%")
         print(f"  Rhythm irregularity: {self.profile.rhythm_irregularity:.2f}")
@@ -367,6 +348,15 @@ class HumanTyper:
             if not self._wait(delay):
                 break
 
+            # ── Newline handling (with optional IDE auto-indent cleanup) ──
+            if char == '\n':
+                self._type_char(char)
+                if self.ide_mode:
+                    self._clear_auto_indent()
+                prev_char = char
+                i += 1
+                continue
+
             # ── Typo injection ──
             if char.isalnum() and self.profile.should_make_typo():
                 immediate, extra_chars = self.profile.get_correction_behavior()
@@ -379,13 +369,10 @@ class HumanTyper:
                                         + random.uniform(0.05, 0.30))
                     if not self._wait(correction_pause):
                         break
-
                     if not self._backspace(1):
                         break
-
                     if not self._wait(random.uniform(0.02, 0.10)):
                         break
-
                     self._type_char(char)
                 else:
                     wrong = self.profile.get_typo_char(char)
@@ -444,8 +431,9 @@ def main():
 Examples:
   python human_typer.py input.txt
   python human_typer.py input.txt --wpm 70
-  python human_typer.py input.txt --typo-rate 0.03 --start-delay 8
-  python human_typer.py input.txt --seed 42   (reproducible run)
+  python human_typer.py input.txt --ide-mode              # for IntelliJ, VS Code, etc.
+  python human_typer.py input.txt --ide-mode --wpm 60
+  python human_typer.py input.txt --seed 42               # reproducible run
 
 Controls:
   F8 / F9   Pause / Resume
@@ -461,6 +449,9 @@ Controls:
                         help="Seconds before typing starts (default: 5)")
     parser.add_argument("--seed", type=int, default=None,
                         help="Random seed for reproducibility")
+    parser.add_argument("--ide-mode", action="store_true",
+                        help="Clear IDE auto-indentation after each Enter "
+                             "(use with IntelliJ, VS Code, Eclipse, etc.)")
 
     args = parser.parse_args()
 
@@ -480,7 +471,8 @@ Controls:
     print(f"Loaded {len(text)} characters from '{path.name}'")
 
     profile = TypingProfile(base_wpm=args.wpm, typo_rate=args.typo_rate)
-    typer = HumanTyper(text, profile=profile, start_delay=args.start_delay)
+    typer = HumanTyper(text, profile=profile, start_delay=args.start_delay,
+                       ide_mode=args.ide_mode)
 
     try:
         typer.run()
