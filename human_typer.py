@@ -17,6 +17,7 @@ Press F8 or F9 to pause/resume. Press ESC to abort.
 
 import argparse
 import math
+import platform
 import random
 import string
 import sys
@@ -53,6 +54,34 @@ SLOW_BIGRAMS = {
 
 SHIFT_CHARS = set('ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+{}|:"<>?~')
 
+# ─── Windows virtual key codes for polling ──────────────────────────────────
+IS_WINDOWS = platform.system() == 'Windows'
+
+if IS_WINDOWS:
+    import ctypes
+    user32 = ctypes.windll.user32
+
+    VK_ESCAPE = 0x1B
+    VK_F8 = 0x77
+    VK_F9 = 0x78
+
+    def _win_key_just_pressed(vk_code):
+        """Check if a key was pressed since last call (bit 0 = toggled).
+
+        GetAsyncKeyState returns:
+          - bit 15 (0x8000): key is currently held down
+          - bit 0  (0x0001): key was pressed since last call to this function
+
+        We use bit 0 so we get a single trigger per press, not continuous
+        firing while held.
+        """
+        state = user32.GetAsyncKeyState(vk_code)
+        return bool(state & 0x0001)
+
+    def _win_drain_key(vk_code):
+        """Consume any pending press for this key (clear bit 0)."""
+        user32.GetAsyncKeyState(vk_code)
+
 
 class TypingProfile:
     """Encapsulates all the parameters that define a 'typist personality'."""
@@ -75,7 +104,6 @@ class TypingProfile:
         self.chars_typed = 0
         self.in_burst = False
         self.burst_remaining = 0
-        self.current_speed_modifier = 1.0
 
     def base_delay(self):
         cpm = self.base_wpm * 5
@@ -180,49 +208,76 @@ class HumanTyper:
         self.start_delay = start_delay
         self.ide_mode = ide_mode
 
-        # Thread synchronization via Events (lock-free)
-        self._resume_event = threading.Event()
-        self._resume_event.set()
-        self._stop_event = threading.Event()
-        self._is_paused = False
+        self._paused = False
+        self._stopped = False
 
         self._keyboard = None
+        # Listener only used on non-Windows (pynput fallback)
         self._listener = None
 
-    def _on_key_press(self, key):
-        """Handle hotkeys. Runs on listener thread — never print() here."""
+    # ── Hotkey detection (platform-specific) ─────────────────────────────
+
+    def _poll_hotkeys(self):
+        """Check for F8/F9/ESC via Windows API polling.
+
+        Called from the main thread inside _wait() — no hooks, no
+        listener threads, no risk of hook timeout from injected keys.
+        """
+        if _win_key_just_pressed(VK_ESCAPE):
+            self._stopped = True
+            return
+
+        if _win_key_just_pressed(VK_F8) or _win_key_just_pressed(VK_F9):
+            self._paused = not self._paused
+            if self._paused:
+                print("\n[PAUSED] Press F8 or F9 to resume", flush=True)
+            else:
+                print("[RESUMED] Typing continues...\n", flush=True)
+
+    def _on_key_press_pynput(self, key):
+        """Fallback hotkey handler for non-Windows (macOS/Linux).
+
+        Uses pynput Listener. On Windows we poll instead — see _poll_hotkeys().
+        """
         from pynput.keyboard import Key
         if key in (Key.f8, Key.f9):
-            if not self._is_paused:
-                self._is_paused = True
-                self._resume_event.clear()
+            self._paused = not self._paused
+            if self._paused:
+                print("\n[PAUSED] Press F8 or F9 to resume", flush=True)
             else:
-                self._is_paused = False
-                self._resume_event.set()
+                print("[RESUMED] Typing continues...\n", flush=True)
         elif key == Key.esc:
-            self._stop_event.set()
-            self._resume_event.set()
+            self._stopped = True
+
+    # ── Wait / sleep with hotkey responsiveness ──────────────────────────
 
     def _wait(self, seconds):
-        """Sleep with responsive pause/stop via Events."""
+        """Sleep for `seconds`, polling for pause/stop hotkeys each tick."""
         elapsed = 0.0
         increment = 0.02
 
         while elapsed < seconds:
-            if self._stop_event.is_set():
+            if IS_WINDOWS:
+                self._poll_hotkeys()
+            if self._stopped:
                 return False
-            if not self._resume_event.is_set():
-                print("\n[PAUSED] Press F8 or F9 to resume", flush=True)
-                self._resume_event.wait()
-                if self._stop_event.is_set():
+
+            # If paused, spin here until unpaused or stopped
+            while self._paused:
+                time.sleep(0.05)
+                if IS_WINDOWS:
+                    self._poll_hotkeys()
+                if self._stopped:
                     return False
-                print("[RESUMED] Typing continues...\n", flush=True)
+
             time.sleep(min(increment, seconds - elapsed))
             elapsed += increment
+
         return True
 
+    # ── Keystroke injection ──────────────────────────────────────────────
+
     def _type_char(self, char):
-        """Type a single character using pynput."""
         from pynput.keyboard import Key
         if char == '\n':
             self._keyboard.press(Key.enter)
@@ -234,21 +289,17 @@ class HumanTyper:
             self._keyboard.type(char)
 
     def _clear_auto_indent(self):
-        """Clear any whitespace the IDE auto-inserted after Enter.
+        """Clear IDE auto-inserted whitespace after Enter.
 
         Sends: Home → Home → Shift+End → Delete
-        Double-Home ensures we reach column 0 even in IDEs with "smart
-        home" that first jumps to the first non-whitespace character.
-        Shift+End selects everything from column 0 to end of line, and
-        Delete removes it.  If the line is empty this is a harmless no-op.
+        Double-Home handles 'smart home' toggle in IntelliJ/VS Code.
         """
         from pynput.keyboard import Key
 
-        # Let the IDE finish processing Enter and inserting auto-indent.
-        # IntelliJ and VS Code do this asynchronously; 80-120ms is safe.
+        # Let IDE finish processing Enter + auto-indent
         time.sleep(random.uniform(0.08, 0.14))
 
-        # Home twice to guarantee column 0 (smart-home toggle)
+        # Home twice → column 0
         self._keyboard.press(Key.home)
         self._keyboard.release(Key.home)
         time.sleep(0.02)
@@ -256,14 +307,14 @@ class HumanTyper:
         self._keyboard.release(Key.home)
         time.sleep(0.02)
 
-        # Shift+End to select all auto-inserted whitespace
+        # Shift+End → select all auto-indent
         self._keyboard.press(Key.shift)
         self._keyboard.press(Key.end)
         self._keyboard.release(Key.end)
         self._keyboard.release(Key.shift)
         time.sleep(0.02)
 
-        # Delete the selection (harmless if nothing selected)
+        # Delete the selection
         self._keyboard.press(Key.delete)
         self._keyboard.release(Key.delete)
         time.sleep(0.02)
@@ -278,6 +329,8 @@ class HumanTyper:
             self._keyboard.release(Key.backspace)
         return True
 
+    # ── Lifecycle ────────────────────────────────────────────────────────
+
     def _cleanup(self):
         if self._listener is not None:
             self._listener.stop()
@@ -287,9 +340,19 @@ class HumanTyper:
     def run(self):
         from pynput.keyboard import Controller, Listener
         self._keyboard = Controller()
-        self._listener = Listener(on_press=self._on_key_press)
-        self._listener.daemon = False
-        self._listener.start()
+
+        if IS_WINDOWS:
+            # Windows: use polling — no listener needed
+            # Drain any stale key states before we start
+            _win_drain_key(VK_F8)
+            _win_drain_key(VK_F9)
+            _win_drain_key(VK_ESCAPE)
+        else:
+            # macOS/Linux: use pynput Listener as fallback
+            self._listener = Listener(on_press=self._on_key_press_pynput)
+            self._listener.daemon = False
+            self._listener.start()
+
         try:
             self._run_inner()
         finally:
@@ -299,8 +362,10 @@ class HumanTyper:
         """Core typing loop."""
 
         mode_label = "IDE mode (auto-indent cleanup ON)" if self.ide_mode else "Standard mode"
+        hotkey_method = "Windows API polling" if IS_WINDOWS else "pynput Listener"
         print(f"\nTyping will begin in {self.start_delay} seconds...")
         print(f"  Mode:       {mode_label}")
+        print(f"  Hotkeys:    {hotkey_method}")
         print(f"  WPM target: ~{self.profile.base_wpm:.0f}")
         print(f"  Typo rate:  ~{self.profile.typo_rate * 100:.1f}%")
         print(f"  Rhythm irregularity: {self.profile.rhythm_irregularity:.2f}")
@@ -318,7 +383,7 @@ class HumanTyper:
         i = 0
 
         while i < len(self.text):
-            if self._stop_event.is_set():
+            if self._stopped:
                 break
 
             char = self.text[i]
@@ -348,7 +413,7 @@ class HumanTyper:
             if not self._wait(delay):
                 break
 
-            # ── Newline handling (with optional IDE auto-indent cleanup) ──
+            # ── Newline handling ──
             if char == '\n':
                 self._type_char(char)
                 if self.ide_mode:
@@ -417,7 +482,7 @@ class HumanTyper:
             prev_char = char
             i += 1
 
-        if self._stop_event.is_set():
+        if self._stopped:
             print("\n[STOPPED] ESC pressed — aborting.", flush=True)
         else:
             print("\n[COMPLETE] Finished typing.", flush=True)
