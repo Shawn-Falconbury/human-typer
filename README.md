@@ -93,10 +93,12 @@ python human_typer.py input.txt --wpm 70 --typo-rate 0.02 --start-delay 8
 
 ### Controls
 
-| Key   | Action             |
-|-------|--------------------|
-| `F9`  | Pause / Resume     |
-| `ESC` | Stop immediately   |
+| Key        | Action             |
+|------------|--------------------|
+| `F8` / `F9` | Pause / Resume   |
+| `ESC`      | Stop immediately   |
+
+> **Note:** Both F8 and F9 work as pause/resume toggles. Some IDEs (IntelliJ, VS Code) intercept F9 for debugging, so F8 is provided as an alternative.
 
 ---
 
