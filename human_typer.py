@@ -22,6 +22,7 @@ import string
 import sys
 import time
 import threading
+from collections import deque
 from pathlib import Path
 
 # ─── Keyboard layout: adjacency map for realistic typos ─────────────────────
@@ -236,36 +237,79 @@ class HumanTyper:
         self._stopped = False
         self._lock = threading.Lock()
 
+        # Thread-safe message queue: listener sets flags, main thread prints
+        self._pending_messages = deque()
+
         # Will be initialized when typing starts
         self._keyboard = None
         self._listener = None
 
     def _on_key_press(self, key):
-        """Handle hotkeys: F9 = pause/resume, ESC = stop."""
+        """Handle hotkeys: F9 = pause/resume, ESC = stop.
+
+        IMPORTANT: Never call print() here — this runs on the pynput
+        listener thread.  Writing to stdout from a daemon thread causes
+        a fatal crash during interpreter shutdown when the buffered-IO
+        lock can't be acquired.  Instead, set flags and queue messages
+        for the main thread to print.
+        """
         from pynput.keyboard import Key
         if key == Key.f9:
             with self._lock:
                 self._paused = not self._paused
-                state = "PAUSED" if self._paused else "RESUMED"
-                print(f"\n[{state}] Press F9 to {'resume' if self._paused else 'pause'}")
+                if self._paused:
+                    self._pending_messages.append(
+                        "\n[PAUSED] Press F9 to resume")
+                else:
+                    self._pending_messages.append(
+                        "\n[RESUMED] Press F9 to pause")
         elif key == Key.esc:
             with self._lock:
                 self._stopped = True
-            print("\n[STOPPED] ESC pressed — aborting.")
-            return False  # stop listener
+                self._paused = False  # unblock _wait if paused
+                self._pending_messages.append(
+                    "\n[STOPPED] ESC pressed — aborting.")
+
+    def _drain_messages(self):
+        """Print any queued messages from the listener (call from main thread only)."""
+        while self._pending_messages:
+            try:
+                msg = self._pending_messages.popleft()
+                print(msg, flush=True)
+            except IndexError:
+                break
 
     def _wait(self, seconds):
         """Sleep in small increments so pause/stop is responsive."""
         elapsed = 0
         increment = 0.02
         while elapsed < seconds:
+            # Drain any pending status messages from the listener
+            self._drain_messages()
             with self._lock:
                 if self._stopped:
                     return False
                 while self._paused:
+                    # Release lock while sleeping so listener can toggle _paused
+                    pass  # fall through to sleep outside the lock
+                else:
+                    # Not paused — continue the countdown
+                    pass
+            # If paused, spin here until unpaused or stopped
+            if self._paused:
+                while True:
+                    self._drain_messages()
                     time.sleep(0.05)
+                    with self._lock:
+                        if self._stopped:
+                            return False
+                        if not self._paused:
+                            break
+                continue  # restart the elapsed countdown after unpause
             time.sleep(min(increment, seconds - elapsed))
             elapsed += increment
+        # Final drain before returning
+        self._drain_messages()
         return True
 
     def _type_char(self, char):
@@ -294,16 +338,34 @@ class HumanTyper:
             self._keyboard.release(Key.backspace)
         return True
 
+    def _cleanup(self):
+        """Cleanly stop the listener and flush output (call from main thread)."""
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener.join(timeout=2.0)
+            self._listener = None
+        # Final drain after listener is dead — safe to print
+        self._drain_messages()
+
     def run(self):
         """Execute the typing simulation."""
         from pynput.keyboard import Controller, Listener
 
         self._keyboard = Controller()
 
-        # Start hotkey listener in background
+        # Start hotkey listener — NOT daemon so we can join() it cleanly
         self._listener = Listener(on_press=self._on_key_press)
-        self._listener.daemon = True
+        self._listener.daemon = False
         self._listener.start()
+
+        try:
+            self._run_inner()
+        finally:
+            # Always clean up the listener, even on exceptions
+            self._cleanup()
+
+    def _run_inner(self):
+        """Core typing loop, separated so run() can wrap it in try/finally."""
 
         # Countdown before starting
         print(f"\nTyping will begin in {self.start_delay} seconds...")
@@ -311,13 +373,13 @@ class HumanTyper:
         print(f"  Typo rate:  ~{self.profile.typo_rate * 100:.1f}%")
         print(f"  Rhythm irregularity: {self.profile.rhythm_irregularity:.2f}")
         print(f"\n  F9 = Pause/Resume | ESC = Stop\n")
-        print(f"  Switch to your target window NOW!\n")
+        print(f"  Switch to your target window NOW!\n", flush=True)
 
         for i in range(self.start_delay, 0, -1):
-            print(f"  {i}...")
+            print(f"  {i}...", flush=True)
             if not self._wait(1.0):
                 return
-        print("  GO!\n")
+        print("  GO!\n", flush=True)
 
         # ── Main typing loop ──
         prev_char = ' '
@@ -434,9 +496,7 @@ class HumanTyper:
             i += 1
 
         # Done!
-        print("\n[COMPLETE] Finished typing.")
-        if self._listener:
-            self._listener.stop()
+        print("\n[COMPLETE] Finished typing.", flush=True)
 
 
 def main():
