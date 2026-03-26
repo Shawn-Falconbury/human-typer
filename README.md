@@ -101,10 +101,10 @@ python human_typer.py input.txt --ide-mode --wpm 70 --typo-rate 0.02
 
 | Key          | Action             |
 |--------------|--------------------|
-| `F8` / `F9`  | Pause / Resume    |
+| `F7` / `F8`  | Pause / Resume    |
 | `ESC`        | Stop immediately   |
 
-> **Note:** Both F8 and F9 work as pause/resume toggles. Some IDEs (IntelliJ, VS Code) intercept F9 for debugging, so F8 is provided as an alternative.
+> **Note:** F7 and F8 are used instead of F9 to avoid conflicts with IDE debugger shortcuts (IntelliJ, VS Code, etc.).
 
 ---
 
@@ -154,6 +154,10 @@ final_delay = base_delay × fatigue × burst × bigram × position × shift × n
 - **noise** — Gaussian jitter so timing is never predictable
 
 Typos are generated using a QWERTY adjacency map, so mistakes look like real finger slips rather than random characters. Correction behavior varies between instant backspace and delayed multi-character correction with realistic hesitation.
+
+### Hotkey Implementation
+
+On Windows, hotkeys are detected via `ctypes.windll.user32.GetAsyncKeyState()` polling on the main thread — this avoids low-level keyboard hooks that can be silently killed by Windows when rapid keystrokes are injected (especially in `--ide-mode`). On macOS/Linux, a `pynput` Listener is used as a fallback.
 
 ---
 

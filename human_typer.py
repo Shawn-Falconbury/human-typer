@@ -12,7 +12,7 @@ Usage:
     python human_typer.py input.txt --wpm 65 --typo-rate 0.025
     python human_typer.py input.txt --ide-mode        # for IntelliJ, VS Code, etc.
 
-Press F8 or F9 to pause/resume. Press ESC to abort.
+Press F7 or F8 to pause/resume. Press ESC to abort.
 """
 
 import argparse
@@ -62,19 +62,11 @@ if IS_WINDOWS:
     user32 = ctypes.windll.user32
 
     VK_ESCAPE = 0x1B
+    VK_F7 = 0x76
     VK_F8 = 0x77
-    VK_F9 = 0x78
 
     def _win_key_just_pressed(vk_code):
-        """Check if a key was pressed since last call (bit 0 = toggled).
-
-        GetAsyncKeyState returns:
-          - bit 15 (0x8000): key is currently held down
-          - bit 0  (0x0001): key was pressed since last call to this function
-
-        We use bit 0 so we get a single trigger per press, not continuous
-        firing while held.
-        """
+        """Check if a key was pressed since last call (bit 0 = toggled)."""
         state = user32.GetAsyncKeyState(vk_code)
         return bool(state & 0x0001)
 
@@ -212,38 +204,30 @@ class HumanTyper:
         self._stopped = False
 
         self._keyboard = None
-        # Listener only used on non-Windows (pynput fallback)
         self._listener = None
 
     # ── Hotkey detection (platform-specific) ─────────────────────────────
 
     def _poll_hotkeys(self):
-        """Check for F8/F9/ESC via Windows API polling.
-
-        Called from the main thread inside _wait() — no hooks, no
-        listener threads, no risk of hook timeout from injected keys.
-        """
+        """Check for F7/F8/ESC via Windows API polling."""
         if _win_key_just_pressed(VK_ESCAPE):
             self._stopped = True
             return
 
-        if _win_key_just_pressed(VK_F8) or _win_key_just_pressed(VK_F9):
+        if _win_key_just_pressed(VK_F7) or _win_key_just_pressed(VK_F8):
             self._paused = not self._paused
             if self._paused:
-                print("\n[PAUSED] Press F8 or F9 to resume", flush=True)
+                print("\n[PAUSED] Press F7 or F8 to resume", flush=True)
             else:
                 print("[RESUMED] Typing continues...\n", flush=True)
 
     def _on_key_press_pynput(self, key):
-        """Fallback hotkey handler for non-Windows (macOS/Linux).
-
-        Uses pynput Listener. On Windows we poll instead — see _poll_hotkeys().
-        """
+        """Fallback hotkey handler for non-Windows (macOS/Linux)."""
         from pynput.keyboard import Key
-        if key in (Key.f8, Key.f9):
+        if key in (Key.f7, Key.f8):
             self._paused = not self._paused
             if self._paused:
-                print("\n[PAUSED] Press F8 or F9 to resume", flush=True)
+                print("\n[PAUSED] Press F7 or F8 to resume", flush=True)
             else:
                 print("[RESUMED] Typing continues...\n", flush=True)
         elif key == Key.esc:
@@ -262,7 +246,6 @@ class HumanTyper:
             if self._stopped:
                 return False
 
-            # If paused, spin here until unpaused or stopped
             while self._paused:
                 time.sleep(0.05)
                 if IS_WINDOWS:
@@ -289,17 +272,11 @@ class HumanTyper:
             self._keyboard.type(char)
 
     def _clear_auto_indent(self):
-        """Clear IDE auto-inserted whitespace after Enter.
-
-        Sends: Home → Home → Shift+End → Delete
-        Double-Home handles 'smart home' toggle in IntelliJ/VS Code.
-        """
+        """Clear IDE auto-inserted whitespace after Enter."""
         from pynput.keyboard import Key
 
-        # Let IDE finish processing Enter + auto-indent
         time.sleep(random.uniform(0.08, 0.14))
 
-        # Home twice → column 0
         self._keyboard.press(Key.home)
         self._keyboard.release(Key.home)
         time.sleep(0.02)
@@ -307,14 +284,12 @@ class HumanTyper:
         self._keyboard.release(Key.home)
         time.sleep(0.02)
 
-        # Shift+End → select all auto-indent
         self._keyboard.press(Key.shift)
         self._keyboard.press(Key.end)
         self._keyboard.release(Key.end)
         self._keyboard.release(Key.shift)
         time.sleep(0.02)
 
-        # Delete the selection
         self._keyboard.press(Key.delete)
         self._keyboard.release(Key.delete)
         time.sleep(0.02)
@@ -342,13 +317,10 @@ class HumanTyper:
         self._keyboard = Controller()
 
         if IS_WINDOWS:
-            # Windows: use polling — no listener needed
-            # Drain any stale key states before we start
+            _win_drain_key(VK_F7)
             _win_drain_key(VK_F8)
-            _win_drain_key(VK_F9)
             _win_drain_key(VK_ESCAPE)
         else:
-            # macOS/Linux: use pynput Listener as fallback
             self._listener = Listener(on_press=self._on_key_press_pynput)
             self._listener.daemon = False
             self._listener.start()
@@ -369,7 +341,7 @@ class HumanTyper:
         print(f"  WPM target: ~{self.profile.base_wpm:.0f}")
         print(f"  Typo rate:  ~{self.profile.typo_rate * 100:.1f}%")
         print(f"  Rhythm irregularity: {self.profile.rhythm_irregularity:.2f}")
-        print(f"\n  F8 / F9 = Pause/Resume | ESC = Stop\n")
+        print(f"\n  F7 / F8 = Pause/Resume | ESC = Stop\n")
         print(f"  Switch to your target window NOW!\n", flush=True)
 
         for i in range(self.start_delay, 0, -1):
@@ -501,7 +473,7 @@ Examples:
   python human_typer.py input.txt --seed 42               # reproducible run
 
 Controls:
-  F8 / F9   Pause / Resume
+  F7 / F8   Pause / Resume
   ESC       Stop immediately
         """
     )
